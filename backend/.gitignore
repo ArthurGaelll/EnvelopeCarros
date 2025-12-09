@@ -1,0 +1,13 @@
+# backend/.gitignore
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+venv/
+.env
+
+# --- Modelos Pesados (Não subir) ---
+*.pt
+*.pth
+*.onnx
+best.pt
