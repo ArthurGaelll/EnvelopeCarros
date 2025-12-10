@@ -1,9 +1,9 @@
-// frontend/src/App.js (Versão Visual Otimizada)
+// frontend/src/App.js
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { SketchPicker } from 'react-color';
+import './App.css';
 
-// --- CARD DA GALERIA ---
 const PartGalleryCard = ({ part, color, opacity, onClick }) => {
   const canvasRef = useRef(null);
 
@@ -13,69 +13,59 @@ const PartGalleryCard = ({ part, color, opacity, onClick }) => {
     const ctx = canvas.getContext('2d');
     const img = new Image();
     img.src = part.image;
-    
+
     img.onload = () => {
       canvas.width = img.width;
       canvas.height = img.height;
-      
-      // 1. Limpa
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // 2. Desenha Imagem
       ctx.drawImage(img, 0, 0);
 
-      // 3. Aplica Tinta (Se tiver cor)
       if (color) {
         ctx.globalCompositeOperation = 'source-atop';
         ctx.fillStyle = color;
         ctx.globalAlpha = opacity;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // Reseta
         ctx.globalCompositeOperation = 'source-over';
         ctx.globalAlpha = 1.0;
       }
     };
   }, [part.image, color, opacity]);
 
-  // Visual do Card: Borda colorida se pintado, cinza se não
-  const borderStyle = color 
-    ? `3px solid ${color}` 
-    : '1px solid #ddd';
+  const activeStyle = color
+    ? { border: `2px solid ${color}`, boxShadow: `0 0 0 2px ${color}33` }
+    : { border: '1px solid #e5e7eb' };
 
   return (
-    <div onClick={onClick} style={{ 
-        border: borderStyle,
-        borderRadius: 8, margin: 5, padding: 5, 
-        cursor: 'pointer', background: '#fff', 
-        width: 110, textAlign: 'center',
-        boxShadow: color ? '0 0 5px rgba(0,0,0,0.2)' : 'none'
-      }}>
-      <canvas ref={canvasRef} style={{maxWidth: '100%', height: 'auto'}} />
-      <div style={{fontSize: 11, marginTop: 4, fontWeight: 'bold', color: '#555'}}>
+    <div className="part-card" onClick={onClick} style={activeStyle}>
+      <canvas ref={canvasRef} />
+      <div className="part-label">
         {part.id.toString().startsWith('yolo') ? '🔒 ' : '✏️ '}{part.label}
       </div>
     </div>
   );
 };
 
-// --- APP PRINCIPAL ---
 function App() {
   const [originalImage, setOriginalImage] = useState(null);
   const [imageFile, setImageFile] = useState(null);
   const [imgDims, setImgDims] = useState({ w: 0, h: 0 });
-  
-  const [parts, setParts] = useState([]); 
-  const [partColors, setPartColors] = useState({}); 
-  
-  const [selectedColor, setSelectedColor] = useState('#FF0000');
-  const [opacity, setOpacity] = useState(0.6);
+  const [parts, setParts] = useState([]);
+  const [partColors, setPartColors] = useState({});
+  const [history, setHistory] = useState([]);
+  // NOVO: Guarda os limites do carro (retângulo Bounding Box)
+  const [carBounds, setCarBounds] = useState(null);
+
+  const [selectedColor, setSelectedColor] = useState('#4f46e5');
+  const [opacity, setOpacity] = useState(0.7);
   const [loading, setLoading] = useState(false);
   const [processingClick, setProcessingClick] = useState(false);
 
   const svgRef = useRef(null);
 
-  // Upload
+  const sortPartsByArea = (partsList) => {
+    return [...partsList].sort((a, b) => b.area - a.area);
+  };
+
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -83,7 +73,9 @@ function App() {
     setImageFile(file);
     setPartColors({});
     setParts([]);
-    
+    setHistory([]);
+    setCarBounds(null); // Reseta limites
+
     const formData = new FormData();
     formData.append('image', file);
 
@@ -91,7 +83,10 @@ function App() {
       const res = await axios.post('http://localhost:8000/analyze_car', formData);
       setOriginalImage(res.data.original);
       setImgDims({ w: res.data.width, h: res.data.height });
-      setParts(res.data.parts);
+      setParts(sortPartsByArea(res.data.parts));
+      // Salva os limites recebidos do backend
+      setCarBounds(res.data.bounds);
+      console.log("Limites do carro:", res.data.bounds);
     } catch (err) {
       alert("Erro ao conectar com o backend.");
     } finally {
@@ -99,37 +94,52 @@ function App() {
     }
   };
 
-  // Pintar pela Galeria (SEMPRE PERMITIDO)
-  const paintPartFromGallery = (id) => {
-    setPartColors(prev => ({ ...prev, [id]: selectedColor }));
+  const applyPaint = (id, color) => {
+    setHistory(prev => [...prev, partColors]);
+    setPartColors(prev => ({ ...prev, [id]: color }));
   };
 
-  // Clique na Imagem (COM REGRAS DE TRAVA)
+  const undoLastAction = () => {
+    if (history.length === 0) return;
+    const previousState = history[history.length - 1];
+    setPartColors(previousState);
+    setHistory(prev => prev.slice(0, -1));
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') undoLastAction();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [history]);
+
   const handlePolygonClick = (id, e) => {
-    e.stopPropagation(); // Não deixa clicar no fundo
-
-    // 1. Se for Automático (YOLO) -> BLOQUEIA
-    if (id.toString().startsWith('yolo')) {
-        console.log("🚫 Bloqueado: Use a galeria para pintar peças automáticas.");
-        return; 
-    }
-
-    // 2. Se for Manual -> PINTA
-    setPartColors(prev => ({ ...prev, [id]: selectedColor }));
+    e.stopPropagation();
+    if (id.toString().startsWith('yolo')) return;
+    applyPaint(id, selectedColor);
   };
 
-  // Clique no Vazio (CRIAR NOVA PEÇA)
+  // --- CLIQUE NO VAZIO (COM TRAVA DE SEGURANÇA) ---
   const handleBackgroundClick = async (e) => {
-    if (!imageFile || processingClick) return;
+    if (!imageFile || processingClick || !carBounds) return;
 
-    // Matemática de Coordenadas (Tela -> Imagem Real)
     const svgRect = svgRef.current.getBoundingClientRect();
-    const clickX = e.clientX - svgRect.left;
-    const clickY = e.clientY - svgRect.top;
     const scaleX = imgDims.w / svgRect.width;
     const scaleY = imgDims.h / svgRect.height;
-    const realX = Math.round(clickX * scaleX);
-    const realY = Math.round(clickY * scaleY);
+    const realX = Math.round((e.clientX - svgRect.left) * scaleX);
+    const realY = Math.round((e.clientY - svgRect.top) * scaleY);
+
+    // --- TRAVA DE SEGURANÇA ---
+    // Verifica se o clique está dentro do retângulo do carro
+    if (
+        realX < carBounds.minX || realX > carBounds.maxX ||
+        realY < carBounds.minY || realY > carBounds.maxY
+    ) {
+        console.log("Clique fora dos limites do carro. Ignorando.");
+        // Opcional: Mostrar um toast/aviso rápido
+        return;
+    }
 
     setProcessingClick(true);
     const formData = new FormData();
@@ -140,11 +150,10 @@ function App() {
     try {
       const res = await axios.post('http://localhost:8000/segment_from_click', formData);
       const newPart = res.data;
-      setParts(prev => [...prev, newPart]);
-      // Já nasce pintado
-      setPartColors(prev => ({ ...prev, [newPart.id]: selectedColor }));
+      setParts(prev => sortPartsByArea([...prev, newPart]));
+      applyPaint(newPart.id, selectedColor);
     } catch (err) {
-      console.log("Nenhuma peça detectada neste ponto.");
+      console.log("Nada encontrado.");
     } finally {
       setProcessingClick(false);
     }
@@ -153,149 +162,124 @@ function App() {
   const pointsToSvg = (pts) => pts.map(p => p.join(',')).join(' ');
 
   return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: 'Segoe UI, sans-serif' }}>
-      
-      {/* --- MENU ESQUERDO --- */}
-      <div style={{ width: 340, background: '#f8f9fa', borderRight: '1px solid #ddd', display:'flex', flexDirection:'column' }}>
-        <div style={{padding: 20, borderBottom: '1px solid #ddd', background: 'white'}}>
-            <h2 style={{margin:0, color: '#333'}}>🚘 Oficina 2.0</h2>
-            <p style={{margin:'5px 0 0 0', fontSize:12, color:'#666'}}>Clique no carro para criar correções.</p>
+    <div className="app-container">
+      {/* ... SIDEBAR (código igual ao anterior) ... */}
+      <div className="sidebar">
+        <div className="sidebar-header">
+          <h2>🏎️ Garage AI <span style={{fontSize:10, background:'#e0e7ff', color:'#4f46e5', padding:'2px 6px', borderRadius:4}}>PRO</span></h2>
         </div>
-        
-        <div style={{padding: 20, overflowY: 'auto', flex: 1}}>
-            {/* Seção Arquivo */}
-            <div style={{marginBottom: 20}}>
-                <label style={{fontWeight:'bold', display:'block', marginBottom:5}}>Imagem do Veículo</label>
-                <input type="file" onChange={handleUpload} style={{width:'100%'}} />
+        <div className="sidebar-content">
+          <div className="panel">
+            <span className="panel-title">1. Projeto</span>
+            <label className="btn-upload">
+              📂 Escolher Imagem do Carro
+              <input type="file" onChange={handleUpload} accept="image/*" />
+            </label>
+            <button className="btn-undo" onClick={undoLastAction} disabled={history.length === 0}>
+              ↩️ Desfazer (Ctrl+Z)
+            </button>
+          </div>
+          <div className="panel">
+            <span className="panel-title">2. Estúdio de Pintura</span>
+            <div style={{display:'flex', justifyContent:'center'}}>
+              <SketchPicker color={selectedColor} onChangeComplete={c => setSelectedColor(c.hex)} disableAlpha={true} width="260px" styles={{default: {picker: {boxShadow: 'none', border: '1px solid #e5e7eb', borderRadius: '8px'}}}} />
             </div>
-
-            {/* Seção Cor */}
-            <div style={{marginBottom: 20, background:'white', padding:10, borderRadius:8, border:'1px solid #eee'}}>
-                <label style={{fontWeight:'bold', display:'block', marginBottom:10}}>Mistura de Tinta</label>
-                <SketchPicker 
-                    color={selectedColor} 
-                    onChangeComplete={c => setSelectedColor(c.hex)} 
-                    disableAlpha={true} 
-                    width="100%"
-                    presetColors={['#D0021B', '#F5A623', '#F8E71C', '#8B572A', '#7ED321', '#417505', '#BD10E0', '#9013FE', '#4A90E2', '#50E3C2', '#B8E986', '#000000', '#4A4A4A', '#9B9B9B', '#FFFFFF']}
-                />
-                <div style={{marginTop: 15}}>
-                    <div style={{display:'flex', justifyContent:'space-between', marginBottom:5, fontSize:12}}>
-                        <span>Transparência</span>
-                        <span>{Math.round(opacity * 100)}%</span>
-                    </div>
-                    <input 
-                        type="range" min="0.1" max="1.0" step="0.1" 
-                        value={opacity} 
-                        onChange={e => setOpacity(parseFloat(e.target.value))} 
-                        style={{width:'100%', cursor:'pointer'}}
-                    />
-                </div>
-            </div>
-
-            {/* Galeria */}
-            {parts.length > 0 && (
-              <div>
-                <h4 style={{marginBottom:10}}>Peças Detectadas ({parts.length})</h4>
-                <div style={{display: 'flex', flexWrap: 'wrap', gap: 5}}>
-                  {parts.map(part => (
-                    <PartGalleryCard 
-                        key={part.id} 
-                        part={part} 
-                        color={partColors[part.id]} 
-                        opacity={opacity} 
-                        onClick={() => paintPartFromGallery(part.id)} 
-                    />
-                  ))}
-                </div>
+            <div style={{marginTop: 16}}>
+              <span className="panel-title" style={{marginBottom:4}}>Intensidade da Tinta</span>
+              <div className="slider-container">
+                <input type="range" min="0.1" max="1.0" step="0.1" value={opacity} onChange={e => setOpacity(parseFloat(e.target.value))} className="slider-input" />
+                <span className="opacity-value">{Math.round(opacity * 100)}%</span>
               </div>
-            )}
+            </div>
+          </div>
+          {parts.length > 0 && (
+            <div>
+              <span className="panel-title" style={{marginBottom: 10}}>Peças Identificadas ({parts.length})</span>
+              <div className="gallery-grid">
+                {parts.map(part => (
+                  <PartGalleryCard key={part.id} part={part} color={partColors[part.id]} opacity={opacity} onClick={() => applyPaint(part.id, selectedColor)} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* --- ÁREA DE TRABALHO (DIREITA) --- */}
-      <div style={{ flex: 1, background: '#2c3e50', display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative', overflow: 'hidden' }}>
-        
+      {/* --- WORKSPACE --- */}
+      <div className="workspace">
         {loading && (
-            <div style={{color:'white', textAlign:'center'}}>
-                <div style={{fontSize: 40, marginBottom:10}}>⚙️</div>
-                <div>Escaneando geometria do carro...</div>
-            </div>
+          <div className="loading-overlay">
+            <div className="spinner"></div>
+            <h3>Escaneando Veículo...</h3>
+          </div>
         )}
-        
+        {!originalImage && !loading && (
+          <div style={{textAlign:'center', color: '#6b7280'}}>
+            <div style={{fontSize: 60, marginBottom: 20}}>📷</div>
+            <h2>Nenhum veículo carregado</h2>
+          </div>
+        )}
         {!loading && originalImage && (
-          <div style={{ position: 'relative', boxShadow: '0 20px 50px rgba(0,0,0,0.5)', borderRadius: 4, overflow:'hidden' }}>
-            
-            {/* Imagem Base */}
+          <div className="canvas-container">
             <img src={originalImage} alt="Carro" style={{ display: 'block', maxHeight: '90vh', maxWidth: '100%' }} />
 
-            {/* Camada SVG (Pintura) */}
-            <svg 
+            <svg
               ref={svgRef}
-              viewBox={`0 0 ${imgDims.w} ${imgDims.h}`} 
+              viewBox={`0 0 ${imgDims.w} ${imgDims.h}`}
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: processingClick ? 'wait' : 'crosshair' }}
               onClick={handleBackgroundClick}
             >
               {parts.map(part => {
-                const myColor = partColors[part.id]; // Cor selecionada (Hex)
+                const myColor = partColors[part.id];
                 const isYolo = part.id.toString().startsWith('yolo');
+                const finalOpacity = myColor ? opacity : 0;
 
-                // --- CORREÇÃO DA PINTURA ---
-                // Usamos fillOpacity nativo do SVG. Se tiver cor, usa a opacidade global. Se não, 0 (invisível).
-                const finalOpacity = myColor ? opacity : 0; 
-                
-                // Borda:
-                // Se pintado: Branca (para destacar a cor)
-                // Se não pintado + YOLO: Verde clarinho (para saber que existe)
-                // Se não pintado + Manual: Amarelo (para saber que existe)
-                let strokeColor = 'transparent';
-                if (myColor) strokeColor = 'rgba(255,255,255,0.8)';
-                else if (isYolo) strokeColor = 'rgba(0,255,0,0.3)';
-                else strokeColor = 'rgba(255,255,0,0.6)';
+                // --- CORREÇÃO VISUAL: BORDAS LIMPAS ---
+                // Se tem cor -> Borda branca forte.
+                // Se NÃO tem cor -> Borda transparente (invisível).
+                // O hover se encarrega de mostrar onde a peça está.
+                const strokeColor = myColor ? 'rgba(255,255,255,0.9)' : 'transparent';
 
                 return (
-                  <polygon 
-                    key={part.id} 
-                    points={pointsToSvg(part.points)} 
-                    
-                    // AQUI ESTÁ A MÁGICA DO PREENCHIMENTO:
-                    fill={myColor || 'white'} 
+                  <polygon
+                    key={part.id}
+                    points={pointsToSvg(part.points)}
+                    fill={myColor || 'white'}
                     fillOpacity={finalOpacity}
-                    
-                    stroke={strokeColor} 
-                    strokeWidth={isYolo ? 1 : 2} 
-                    
-                    // Cursor muda para "Proibido" se for peça automática
-                    style={{ cursor: isYolo ? 'not-allowed' : 'pointer', transition: 'fill-opacity 0.2s' }} 
-                    
+                    stroke={strokeColor}
+                    strokeWidth={isYolo ? 1 : 2}
+                    className="polygon-shape"
+                    style={{
+                      cursor: isYolo ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s'
+                    }}
                     onClick={(e) => handlePolygonClick(part.id, e)}
-                    
-                    // Hover Effect (Apenas visual, sem pintar)
-                    onMouseEnter={e => { 
-                        if(!myColor && !isYolo) { // Só brilha se for manual e sem tinta
+
+                    // Efeito Hover para mostrar peças não pintadas
+                    onMouseEnter={e => {
+                        if(!myColor) {
                             e.target.setAttribute('fill', 'white');
                             e.target.setAttribute('fill-opacity', '0.3');
+                            // Cor da borda no hover dependendo do tipo
+                            e.target.setAttribute('stroke', isYolo ? 'rgba(79, 70, 229, 0.5)' : 'rgba(245, 158, 11, 0.8)');
                         }
                     }}
-                    onMouseLeave={e => { 
-                        if(!myColor && !isYolo) {
+                    onMouseLeave={e => {
+                        if(!myColor) {
                             e.target.setAttribute('fill-opacity', '0');
+                            e.target.setAttribute('stroke', 'transparent');
                         }
                     }}
                   >
-                    <title>{part.label} {isYolo ? '(Automático - Bloqueado)' : '(Manual - Editável)'}</title>
+                    <title>{part.label}</title>
                   </polygon>
                 );
               })}
             </svg>
-            
+
             {processingClick && (
-                <div style={{position:'absolute', top:20, right:20, background:'rgba(0,0,0,0.8)', color:'white', padding:'8px 15px', borderRadius:20, fontSize:14, display:'flex', alignItems:'center', gap:10}}>
-                    <div className="spinner" style={{width:10, height:10, borderRadius:'50%', border:'2px solid white', borderTopColor:'transparent', animation:'spin 1s linear infinite'}}></div>
-                    Criando peça nova...
-                </div>
+              <div className="toast">🔨 Criando peça manual...</div>
             )}
-            <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
           </div>
         )}
       </div>

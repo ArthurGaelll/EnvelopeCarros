@@ -1,4 +1,4 @@
-# backend/main.py
+# backend/main.py (Versão com Cálculo de Limites do Carro)
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,10 +8,11 @@ import torch
 import base64
 from ultralytics import YOLO
 from segment_anything import sam_model_registry, SamPredictor
+import sys
 
-# --- CONFIGURAÇÕES ---
-YOUR_YOLO_MODEL = "best.pt" 
-SAM_CHECKPOINT = "sam_vit_b_01ec64.pth" 
+# --- CONFIG ---
+YOUR_YOLO_MODEL = "best.pt"
+SAM_CHECKPOINT = "sam_vit_b_01ec64.pth"
 SAM_TYPE = "vit_b"
 
 app = FastAPI()
@@ -45,11 +46,13 @@ def encode_to_base64(img):
 
 def mask_to_polygon(mask_np):
     contours, _ = cv2.findContours(mask_np, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours: return []
+    if not contours: return [], 0
     largest = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(largest)
     epsilon = 0.002 * cv2.arcLength(largest, True)
     approx = cv2.approxPolyDP(largest, epsilon, True)
-    return approx.reshape(-1, 2).tolist()
+    # Retorna os pontos e a área
+    return approx.reshape(-1, 2).tolist(), area
 
 def resize_image(image, max_size=1024):
     h, w = image.shape[:2]
@@ -74,26 +77,42 @@ async def analyze_car(image: UploadFile = File(...)):
 
         results = yolo_model(original_img, verbose=False)[0]
         sam_predictor.set_image(original_img)
-        
+
         parts_data = []
-        
+
+        # Variáveis para calcular os limites do carro inteiro
+        # Inicializamos com valores opostos extremos
+        min_x, min_y = w, h
+        max_x, max_y = 0, 0
+        found_any_part = False
+
         for i, box in enumerate(results.boxes):
             try:
                 cls_id = int(box.cls)
                 label = results.names[cls_id]
                 box_xyxy = box.xyxy.cpu().numpy()[0]
-                
+
                 box_tensor = torch.tensor(np.array([box_xyxy]), device=sam_predictor.device)
                 transformed_box = sam_predictor.transform.apply_boxes_torch(box_tensor, (h, w))
-                
+
                 masks, _, _ = sam_predictor.predict_torch(
                     point_coords=None, point_labels=None,
                     boxes=transformed_box, multimask_output=False
                 )
                 mask_np = masks[0, 0].cpu().numpy().astype(np.uint8)
-                
-                polygon = mask_to_polygon(mask_np)
+
+                polygon, area = mask_to_polygon(mask_np)
                 if len(polygon) < 3: continue
+
+                # --- CÁLCULO DOS LIMITES ---
+                # Varre todos os pontos do polígono para achar os extremos
+                found_any_part = True
+                for point in polygon:
+                    px, py = point
+                    if px < min_x: min_x = px
+                    if py < min_y: min_y = py
+                    if px > max_x: max_x = px
+                    if py > max_y: max_y = py
 
                 img_rgba = cv2.cvtColor(original_img, cv2.COLOR_BGR2BGRA)
                 img_rgba[:, :, 3] = mask_np * 255
@@ -102,18 +121,26 @@ async def analyze_car(image: UploadFile = File(...)):
                     y1, y2, x1, x2 = ys.min(), ys.max(), xs.min(), xs.max()
                     cropped = img_rgba[y1:y2+1, x1:x2+1]
                     b64_crop = encode_to_base64(cropped)
-                    
+
                     parts_data.append({
-                        "id": f"yolo_{i}", # ID DE TRAVA
+                        "id": f"yolo_{i}",
                         "label": label,
                         "points": polygon,
+                        "area": area,
                         "image": f"data:image/png;base64,{b64_crop}"
                     })
             except: continue
 
         original_b64 = encode_to_base64(original_img)
+
+        # Se não achou nada, reseta os limites para 0
+        if not found_any_part:
+             min_x, min_y, max_x, max_y = 0, 0, 0, 0
+
+        # Retorna os dados e os limites do carro (bounds)
         return JSONResponse({
             "width": w, "height": h,
+            "bounds": {"minX": min_x, "minY": min_y, "maxX": max_x, "maxY": max_y}, # <-- NOVO
             "original": f"data:image/png;base64,{original_b64}",
             "parts": parts_data
         })
@@ -134,7 +161,7 @@ async def segment_from_click(
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
         original_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
+
         original_img = resize_image(original_img)
         h, w = original_img.shape[:2]
 
@@ -155,25 +182,26 @@ async def segment_from_click(
         )
         mask_np = masks[0, 0].cpu().numpy().astype(np.uint8)
 
-        polygon = mask_to_polygon(mask_np)
+        polygon, area = mask_to_polygon(mask_np)
         if len(polygon) < 3: return JSONResponse({"error": "Vazio"}, 400)
 
         img_rgba = cv2.cvtColor(original_img, cv2.COLOR_BGR2BGRA)
         img_rgba[:, :, 3] = mask_np * 255
         ys, xs = np.where(mask_np > 0)
-        
+
         if len(ys) > 0:
             y1, y2, x1, x2 = ys.min(), ys.max(), xs.min(), xs.max()
             cropped = img_rgba[y1:y2+1, x1:x2+1]
             b64_crop = encode_to_base64(cropped)
-            
+
             return JSONResponse({
-                "id": f"manual_{click_x}_{click_y}", # ID DE PERMISSÃO
+                "id": f"manual_{click_x}_{click_y}",
                 "label": "Correção Manual",
                 "points": polygon,
+                "area": area,
                 "image": f"data:image/png;base64,{b64_crop}"
             })
-            
+
         return JSONResponse({"error": "Vazio"}, 400)
 
     except Exception as e:
