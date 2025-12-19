@@ -300,3 +300,94 @@ input[type="file"] {
   from { transform: translateY(-20px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* frontend/src/App.css (Adicione/Atualize isso) */
+
+/* Botão de Toggle (Pincel) */
+.toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  color: #374151;
+  transition: all 0.2s;
+  margin-bottom: 15px;
+}
+
+.toggle-btn.active {
+  background: #e0e7ff; /* Azul clarinho */
+  border-color: #4f46e5;
+  color: #4f46e5;
+}
+
+.toggle-btn:hover {
+  background: #f9fafb;
+}
+
+/* Cursor Personalizado */
+.brush-cursor {
+  cursor: crosshair !important;
+}
+
+
+/* frontend/src/App.css (Adicione ao final) */
+
+/* Abas de Ferramentas */
+.tool-tabs {
+  display: flex;
+  background: #e5e7eb;
+  padding: 4px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+
+.tool-tab {
+  flex: 1;
+  text-align: center;
+  padding: 8px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #6b7280;
+  transition: all 0.2s;
+  border: none;
+  background: transparent;
+}
+
+.tool-tab.active {
+  background: white;
+  color: #4f46e5;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.tool-tab:hover:not(.active) {
+  background: rgba(255,255,255,0.5);
+  color: #374151;
+}
+
+/* Botão de fechar laço */
+.finish-lasso-btn {
+    width: 100%;
+    padding: 10px;
+    margin-top: 10px;
+    background: #10b981; /* Verde */
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+.finish-lasso-btn:hover { background: #059669; }
+.finish-lasso-btn:disabled { background: #a7f3d0; cursor: not-allowed; }
